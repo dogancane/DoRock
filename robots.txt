@@ -1,0 +1,51 @@
+# This tool is not for public consumption. Keep it out of search results.
+#
+# Note: crawlers only read robots.txt from the DOMAIN ROOT. If this is served
+# as a GitHub Pages project site (username.github.io/repository/), this file
+# sits at /repository/robots.txt and will be ignored. The noindex meta tags in
+# index.html are what actually prevent indexing in that case.
+#
+# Neither of these makes the page private. Anyone with the URL can open it.
+
+User-agent: *
+Disallow: /
+
+User-agent: Googlebot
+Disallow: /
+
+User-agent: Bingbot
+Disallow: /
+
+User-agent: Slurp
+Disallow: /
+
+User-agent: DuckDuckBot
+Disallow: /
+
+User-agent: Baiduspider
+Disallow: /
+
+User-agent: YandexBot
+Disallow: /
+
+# Common crawlers used to build training corpora and archives
+User-agent: CCBot
+Disallow: /
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: PerplexityBot
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: ia_archiver
+Disallow: /
