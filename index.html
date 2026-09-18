@@ -370,7 +370,7 @@ details.trace.adv summary{color:var(--ink-2);font-weight:500}
           <rect x="9" y="1" width="2.2" height="12" fill="#7fa0b4"/>
           <line x1="0" y1="15.5" x2="20" y2="15.5" stroke="#4d7a91" stroke-width="0"/>
         </svg>
-        <div class="title">Scour &amp; Rock<br>Installation Planner</div>
+        <div class="title">DoRock</div>
       </div>
       <div class="proj" id="projLabel">Untitled project</div>
       <div class="scen" id="scenarioLabel">Base case</div>
@@ -2154,6 +2154,39 @@ function syncPileSets(){
   ROUTE_CACHE={key:null,val:null}; QDIST_CACHE.clear();
 }
 
+
+/* Shape and lay phase are not independent, so choosing one has to move the
+   other. A pancake is only possible before the pile is driven, so picking it
+   puts the layer pre-lay. Putting a layer post-lay means the pile is in the
+   water, so a pancake becomes a donut. Without this the selection silently
+   loses to the phase and the drawing does not change. */
+function setProjectShape(shape){
+  const sc=STATE.scour;
+  sc.geometryType=shape;
+  sc.layers.forEach(L=>{
+    const own=L.shape||'';
+    if(shape==='pancake' && (own===''||own==='pancake')) L.layPhase='pre';
+    if(shape!=='pancake' && own==='') { /* phase is the user's to choose */ }
+  });
+  refresh();
+}
+function setLayerShape(L,shape){
+  L.shape=shape;
+  const eff=shape||STATE.scour.geometryType;
+  if(eff==='pancake') L.layPhase='pre';
+  refresh();
+}
+function setLayerPhase(L,phase){
+  L.layPhase=phase;
+  const eff=L.shape||STATE.scour.geometryType;
+  if(phase==='post' && eff==='pancake'){
+    // the pile is in the water, so this layer is an annulus
+    if(L.shape==='pancake') L.shape='donut';
+    else if(STATE.scour.layers.every(x=>(x.shape||'')==='')) L.shape='donut';
+  }
+  refresh();
+}
+
 /* ---- site position and sea distance -------------------------------------- */
 function siteCentroid(){
   const withLL=STATE.turbines.filter(t=>isFinite(t.lat)&&isFinite(t.lon)&&(t.lat||t.lon));
@@ -3228,28 +3261,55 @@ function sectionSVG(){
   svg+=`<rect x="0" y="${bed}" width="${W}" height="${H-bed}" fill="#f2ead6"/>`;
   svg+=`<line x1="0" y1="${bed}" x2="${W}" y2="${bed}" stroke="#c3b899" stroke-width="1.5"/>`;
   svg+=`<text x="8" y="${bed+13}" font-size="9" fill="#8a8168">seabed</text>`;
-  // layers, stacked
+  /* Layers are built into a buffer first, because whether the pile is drawn
+     over the rock or behind it depends on the lay phase. A layer placed with
+     no opening is drawn as one unbroken section across the centre, since that
+     is what a full pancake is. */
+  let rock='', callouts='';
   let base=bed;
   gs.forEach((g,i)=>{
     const [fill,stroke]=layerColour(i);
     const th=g.thickness*sy;
-    [1,-1].forEach(s=>{
-      const pts=[[s*g.innerR*sx,base],[s*g.innerR*sx,base-th],[s*g.topR*sx,base-th],[s*g.bottomR*sx,base]];
-      svg+=`<polygon points="${pts.map(p=>`${cx+p[0]},${p[1]}`).join(' ')}" fill="${fill}" stroke="${stroke}" stroke-width="0.8"/>`;
-    });
-    // thickness callout on the left
-    svg+=`<line x1="${cx-g.topR*sx-14}" y1="${base}" x2="${cx-g.topR*sx-14}" y2="${base-th}" stroke="${stroke}" stroke-width="0.8"/>`;
-    svg+=`<text x="${cx-g.topR*sx-18}" y="${base-th/2+3}" font-size="9" text-anchor="end" fill="#3f4b55">${sc.layers[i].name} ${g.thickness.toFixed(2)} m</text>`;
+    if(g.innerR<=0){
+      // continuous: one polygon from toe to toe
+      const pts=[[-g.bottomR*sx,base],[-g.topR*sx,base-th],[g.topR*sx,base-th],[g.bottomR*sx,base]];
+      rock+=`<polygon points="${pts.map(p=>`${cx+p[0]},${p[1]}`).join(' ')}" fill="${fill}" stroke="${stroke}" stroke-width="0.8"/>`;
+    } else {
+      [1,-1].forEach(s=>{
+        const pts=[[s*g.innerR*sx,base],[s*g.innerR*sx,base-th],[s*g.topR*sx,base-th],[s*g.bottomR*sx,base]];
+        rock+=`<polygon points="${pts.map(p=>`${cx+p[0]},${p[1]}`).join(' ')}" fill="${fill}" stroke="${stroke}" stroke-width="0.8"/>`;
+      });
+    }
+    callouts+=`<line x1="${cx-g.topR*sx-14}" y1="${base}" x2="${cx-g.topR*sx-14}" y2="${base-th}" stroke="${stroke}" stroke-width="0.8"/>`;
+    callouts+=`<text x="${cx-g.topR*sx-18}" y="${base-th/2+3}" font-size="9" text-anchor="end" fill="#3f4b55">${sc.layers[i].name} ${g.thickness.toFixed(2)} m</text>`;
     base-=th;
   });
-  // pile
-  if(sc.layPhase==='post'){
+  /* The pile is in the water only if a layer is placed post-lay. Where every
+     layer goes in first, it is a marked-out position drawn behind the rock, so
+     the section reads as an unbroken pancake over the future pile. */
+  const pileExists = gs.some(g=>g.phase==='post');
+  if(pileExists){
+    // the pile is in the water: draw it solid, over the rock placed around it
+    svg+=rock;
     svg+=`<rect x="${cx-mono}" y="34" width="${2*mono}" height="${bed-34}" fill="#aab3ba" stroke="#6d7880"/>`;
     svg+=`<text x="${cx}" y="26" font-size="10" text-anchor="middle" fill="#4b565e">monopile D = ${gs[0].D.toFixed(2)} m</text>`;
   } else {
-    svg+=`<rect x="${cx-mono}" y="34" width="${2*mono}" height="${bed-34}" fill="none" stroke="#aab3ba" stroke-dasharray="4 3"/>`;
-    svg+=`<text x="${cx}" y="26" font-size="10" text-anchor="middle" fill="#8a929a">pile position, D = ${gs[0].D.toFixed(2)} m (installed later)</text>`;
+    /* Nothing is in the water yet, so there is no pile to draw. Its position is
+       marked with two dotted lines and nothing else. Where the rock runs across
+       the centre they stop at its surface, because the rock is over the spot;
+       where the layers leave an opening they run down to the seabed through it. */
+    const covered = gs.every(g=>g.innerR<=0);
+    const crestY = bed - totalT*sy;
+    const yEnd = covered ? crestY : bed;
+    svg+=rock;
+    [-1,1].forEach(s=>{
+      svg+=`<line x1="${cx+s*mono}" y1="34" x2="${cx+s*mono}" y2="${yEnd}" `+
+           `stroke="#9aa5ad" stroke-width="1.1" stroke-dasharray="4 4"/>`;
+    });
+    svg+=`<line x1="${cx-mono}" y1="34" x2="${cx+mono}" y2="34" stroke="#9aa5ad" stroke-width="1.1" stroke-dasharray="4 4"/>`;
+    svg+=`<text x="${cx}" y="26" font-size="10" text-anchor="middle" fill="#8a929a">pile position, D = ${gs[0].D.toFixed(2)} m, driven later</text>`;
   }
+  svg+=callouts;
   // dimensions from the pile wall, one per layer crest plus the widest toe
   const dim=(y,r0,r1,label,col)=>{
     const x0=cx+r0*sx, x1=cx+r1*sx;
@@ -3260,12 +3320,18 @@ function sectionSVG(){
   };
   let dy=bed+26;
   gs.forEach((g,i)=>{
-    svg+=dim(dy,g.monopileR,g.topR,`${sc.layers[i].name} crest ${(g.topR-g.monopileR).toFixed(2)} m from wall  (Ø ${g.topDiameter.toFixed(2)})`, layerColour(i)[1]);
+    const lbl = g.pileDeducted
+      ? `${sc.layers[i].name} crest ${(g.topR-g.monopileR).toFixed(2)} m from wall  (Ø ${g.topDiameter.toFixed(2)})`
+      : `${sc.layers[i].name} crest R ${g.topR.toFixed(2)} m  (Ø ${g.topDiameter.toFixed(2)})`;
+    svg+=dim(dy, g.pileDeducted?g.monopileR:0, g.topR, lbl, layerColour(i)[1]);
     dy+=19;
   });
   const widest=gs.reduce((a,g)=>g.bottomR>a.bottomR?g:a,gs[0]);
-  svg+=dim(dy,widest.monopileR,widest.bottomR,`outer toe Ø ${widest.bottomDiameter.toFixed(2)} m`,'#5b6b78');
-  svg+=`<text x="8" y="${H-8}" font-size="9" fill="#8a929a">${t.id} · total nominal thickness ${totalT.toFixed(2)} m · thickness exaggerated for legibility · ${sc.layPhase==='pre'?'pre-lay':'post-lay'} · ${sc.layers.map((L,i)=>'1:'+gs[i].impliedSlope.toFixed(2)).join(' / ')} slope</text>`;
+  svg+=dim(dy, widest.pileDeducted?widest.monopileR:0, widest.bottomR,
+    `outer toe Ø ${widest.bottomDiameter.toFixed(2)} m`,'#5b6b78');
+  const desc=sc.layers.map((L,i)=>`${L.name} ${gs[i].phase==='pre'?'pre-lay':'post-lay'} ${gs[i].shape}`).join(', ');
+  svg+=`<text x="8" y="${H-20}" font-size="9" fill="#8a929a">${t.id} · ${desc}</text>`;
+  svg+=`<text x="8" y="${H-8}" font-size="9" fill="#8a929a">total nominal thickness ${totalT.toFixed(2)} m · thickness exaggerated for legibility · ${sc.layers.map((L,i)=>'1:'+gs[i].impliedSlope.toFixed(2)).join(' / ')} slope</text>`;
   svg+='</svg>';
   return svg;
 }
@@ -3337,13 +3403,18 @@ function planSVG(){
       if(d) svg+=`<path d="${d}" fill="url(#excl)" stroke="#d08b4f" stroke-width="0.8" stroke-dasharray="4 3"/>`;
     });
   }
-  svg+=`<circle cx="${cx}" cy="${cy}" r="${gs[0].monopileR*s}" fill="#6f7981" stroke="#4b555c"/>`;
+  // solid only where a layer is placed after the pile is driven
+  const pileHere = gs.some(g=>g.phase==='post');
+  svg+= pileHere
+    ? `<circle cx="${cx}" cy="${cy}" r="${gs[0].monopileR*s}" fill="#6f7981" stroke="#4b555c"/>`
+    : `<circle cx="${cx}" cy="${cy}" r="${gs[0].monopileR*s}" fill="none" stroke="#8a929a" stroke-width="1.2" stroke-dasharray="5 4"/>`;
 
   const wid=gs.reduce((a,g)=>g.bottomR>a.bottomR?g:a,gs[0]);
   const y=cy-wid.bottomR*s-8;
   svg+=`<line x1="${cx-wid.bottomR*s}" y1="${y}" x2="${cx+wid.bottomR*s}" y2="${y}" stroke="#5b6b78" stroke-width="0.7"/>`;
   svg+=`<text x="${cx}" y="${y-4}" font-size="9" text-anchor="middle" fill="#3f4b55">outer Ø ${wid.bottomDiameter.toFixed(2)} m</text>`;
   if(gs[0].innerR>0) svg+=`<text x="${cx}" y="${cy+gs[0].innerR*s+12}" font-size="9" text-anchor="middle" fill="#3f4b55">opening Ø ${gs[0].innerDiameter.toFixed(2)} m</text>`;
+  else svg+=`<text x="${cx}" y="${cy+gs[0].monopileR*s+13}" font-size="9" text-anchor="middle" fill="#8a929a">pile position, rock placed across it</text>`;
   if(cutLayer && cutLayer.wedges.length){
     const w0=cutLayer.wedges[0];
     svg+=`<text x="8" y="${H-22}" font-size="9" fill="#a06a34">exclusion zone: ${w0.angle.toFixed(0)}\u00b0`+
@@ -3365,18 +3436,17 @@ R.scour = function(page){
 
   const top=card('Installation condition');
   const g1=el('div',{class:'grid two'});
-  g1.appendChild(selField('Lay phase',sc.layPhase,
-    [{value:'pre',label:'Pre-lay — rock before the pile'},{value:'post',label:'Post-lay — pile already installed'}],
+  g1.appendChild(selField('Default lay phase for new layers',sc.layPhase,
+    [{value:'pre',label:'Pre-lay, before the pile'},{value:'post',label:'Post-lay, after the pile'}],
     v=>{sc.layPhase=v; refresh();},
-    sc.layPhase==='pre'?'No pile present, so a pancake can be laid as a continuous disc.'
-                       :'The pile occupies the centre and its footprint is excluded.'));
+    'Only the starting value for a layer added later. Each layer carries its own lay phase, set beside its shape below.'));
   g1.appendChild(selField('Geometry',sc.geometryType,
     [{value:'pancake',label:'Pancake — full disc, pre-lay only'},
      {value:'donut',label:'Donut — annulus around the pile'},
      {value:'crescent',label:'Crescent — donut with corridors removed'}],
-    v=>{sc.geometryType=v; refresh();},
+    v=>setProjectShape(v),
     sc.geometryType==='pancake'
-      ? 'The whole circle is placed and nothing is deducted. Only possible before the pile is driven.'
+      ? 'The whole circle is placed and nothing is deducted. Choosing it puts the layers pre-lay, since it is only possible before the pile is driven.'
       : 'The pile is deducted over the full thickness of the layer, together with the gap set on each layer below.'));
   top.appendChild(g1);
   top.appendChild(liveBlock(box=>{
@@ -3493,13 +3563,15 @@ function layerCard(L,idx){
   gg0.appendChild(selField('Lay phase',Engine.layerPhase(L,sc),
     [{value:'pre',label:'Pre-lay, before the monopile'},
      {value:'post',label:'Post-lay, after the monopile'}],
-    v=>{L.layPhase=v; refresh();}));
+    v=>setLayerPhase(L,v),
+    'Going post-lay turns a pancake into a donut, because the pile is then in the water.'));
   gg0.appendChild(selField('Shape',L.shape||'',
     [{value:'',label:'Follow the project ('+sc.geometryType+')'},
      {value:'pancake',label:'Pancake, full disc (pre-lay only)'},
      {value:'donut',label:'Donut, annulus'},
      {value:'crescent',label:'Crescent, donut with corridors'}],
-    v=>{L.shape=v; refresh();}));
+    v=>setLayerShape(L,v),
+    'Choosing a pancake puts this layer pre-lay.'));
   c.appendChild(gg0);
   c.appendChild(liveBlock(box=>{
     const g=Engine.resolveLayer(L,refTurbine(),sc,'nom');
@@ -4072,8 +4144,8 @@ R.cycle = function(page){
   STATE.scour.layers.forEach(L=>{
     gpl.appendChild(selField(L.name+' lay phase', Engine.layerPhase(L,STATE.scour),
       [{value:'pre',label:'Pre-lay, before the monopile'},{value:'post',label:'Post-lay, after the monopile'}],
-      v=>{L.layPhase=v; refresh();},
-      'Also settable on the Scour layers tab, alongside the shape.'));
+      v=>setLayerPhase(L,v),
+      'Also settable on the Scour layers tab, alongside the shape. A pancake becomes a donut if moved post-lay.'));
   });
   pol.appendChild(gpl);
   pol.appendChild(liveBlock(box=>{
