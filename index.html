@@ -638,7 +638,12 @@ function computeLayout(c, reach, digDepth) {
   const aftLen = Math.max(16, 0.12 * c.L), accLen = Math.max(24, 0.2 * c.L), Lt = 18, bh = 2.2;
   const cargo = c.L - aftLen - accLen;
   const LhGeo = (cargo - Lt - 4 * bh) / 2;
-  const Lh = clamp(LhGeo, 16, 62);
+  // hoppers sit at the tower end of each hold, slightly to port. The hold length is limited so that the
+  // excavator on its central pedestal can reach the hopper (dump radius = max reach - 2 m).
+  const wing0 = Math.max(3.2, 0.09 * c.B), Bh0 = c.B - 2 * wing0, HOPH = 2.7;
+  const hopZ = -Math.min(4, Math.max(0, Bh0 / 2 - HOPH - 1.5)), dumpR = reach - 2.0;
+  const hopDx = Math.sqrt(Math.max(1, dumpR * dumpR - hopZ * hopZ));
+  const Lh = clamp(LhGeo, 16, Math.min(62, 2 * (hopDx + HOPH + 0.6)));
   const extra = Math.max(0, LhGeo - Lh) * 2;         // spare length becomes open deck fore and aft
   let x = Lo.stern + aftLen + extra * 0.5;
   Lo.aftDeckEnd = x;
@@ -674,16 +679,16 @@ function computeLayout(c, reach, digDepth) {
   // coaming as the excavator's dump radius allows; it stands on a platform at coaming-top level bracketed off the
   // side wall, so the rock surface stays clear below it and the hold centre around the pedestal is open.
   Lo.hoppers = Lo.holds.map((H, i) => {
-    const half = 2.7, apron = 1.3, platY = Lo.deck + Lo.coaming;
-    const zWall = Bh / 2 - half + 0.3, zReach = reach - 2.0;
-    const hz = Math.max(H.pedR + 1.4 + half + apron, Math.min(zWall, zReach));
-    return { name: i === 0 ? 'HOPPER AFT' : 'HOPPER FWD', short: i === 0 ? 'AFT' : 'FWD', x: H.cx, z: hz, half, outHalf: 0.8,
-      platY, bottom: platY + 1.2, top: platY + 3.6, cap: 160, apron, dir: 1, rot: -Math.PI / 2, hold: i, bridge: Bh / 2 - hz, wallZ: Bh / 2 };
+    const half = HOPH, apron = 1.3, platY = Lo.deck + Lo.coaming;
+    const dir = i === 0 ? 1 : -1;                                   // towards the tower block
+    const dx = Math.min(hopDx, Lh / 2 - half - 0.6), hx = H.cx + dir * dx;
+    return { name: i === 0 ? 'HOPPER AFT' : 'HOPPER FWD', short: i === 0 ? 'AFT' : 'FWD', x: hx, z: hopZ, half, outHalf: 0.8,
+      platY, bottom: platY + 1.2, top: platY + 3.6, cap: 160, apron, dir: 1, tdir: dir, rot: dir > 0 ? 0 : Math.PI, hold: i, bridge: Lh / 2 - dx, endX: dir > 0 ? H.x1 : H.x0 };
   });
   const tc = (Lo.tower[0] + Lo.tower[1]) / 2;
   Lo.towerX = tc;
   Lo.moon = { x0: tc - 2.6, x1: tc + 2.6, z0: -2.6, z1: 2.6 };
-  Lo.ifp = { x: tc, z: c.B / 2 + 0.6, y: Lo.deck + 1.5 };   // inclined fallpipe hinge, starboard side
+  Lo.ifp = { x: tc, z: c.B / 2 + 0.6, y: Lo.deck - 0.2 };   // inclined fallpipe hinge, starboard side
   return Lo;
 }
 function floorAt(H, x, z) {
@@ -939,16 +944,14 @@ function buildVessel() {
   }
 
   // ---- hoppers (one per hold) with protective guards, bridges and conveyors to the tower
-  const T0 = Lo.tower[0], T1 = Lo.tower[1], tc = Lo.towerX;
+  const tc = Lo.towerX, Lb = Lo.tower[1] - Lo.tower[0] - 4;
   for (const H of HOPPER_DEFS) {
-    // hopper outlet -> across the coaming -> along the starboard wing deck -> tower
-    const by = H.platY + 0.55, zw = H.wallZ + 0.35 + Math.max(1.2, (B / 2 - H.wallZ) * 0.45), xb = H.hold === 0 ? T0 + 1.5 : T1 - 1.5;
-    const P = [V3(H.x + 0.6 * Math.cos(H.rot), by, H.z), V3(H.x, by, zw), V3(xb, by, zw)];
-    P[0].set(H.x, by, H.z + 0.6);
-    buildBelt(P[0], P[1], 1.2, false); buildBelt(P[1], P[2], 1.2, true);
-    VESSEL.beltPaths.push([...P.map(v => v.clone().setY(by + 0.25)), V3(tc, D + 13.5, 0)]);
-    addObst(H.x - 0.8, H.platY, Math.min(P[0].z, zw) , H.x + 0.8, by + 0.15, zw + 0.8, 'conveyor');
-    addObst(Math.min(H.x, xb) - 0.8, D, zw - 0.8, Math.max(H.x, xb) + 0.8, by + 1.2, zw + 0.8, 'conveyor');
+    // hopper outlet -> over the bulkhead coaming -> straight along the main deck into the tower side wall
+    const by = H.platY + 0.55, xb = tc - H.tdir * (Lb / 2 + 0.1);
+    const P = [V3(H.x + H.tdir * 0.6, by, H.z), V3(xb, by, H.z)];
+    buildBelt(P[0], P[1], 1.2, true);
+    VESSEL.beltPaths.push([P[0].clone().setY(by + 0.25), P[1].clone().setY(by + 0.25), V3(tc, D + 13.5, 0)]);
+    addObst(Math.min(P[0].x, xb), D, H.z - 0.8, Math.max(P[0].x, xb), by + 1.2, H.z + 0.8, 'conveyor');
   }
   // ---- tower block (vertical fallpipe) between the holds
   buildTower();
@@ -1080,7 +1083,7 @@ function buildTower() {
   box(L + 0.05, 1.0, W + 0.05, M.hull, 0, Hb - 0.5, 0, g, false);
   for (const sz of [-1, 1]) for (let i = 0; i < 4; i++) { const p = new THREE.Mesh(new THREE.PlaneGeometry(L * 0.2, 2.2), M.dark); p.position.set(-L * 0.36 + i * L * 0.24, Hb * 0.55, sz * (W / 2 + 0.02)); if (sz < 0) p.rotation.y = Math.PI; g.add(p); }
   // conveyor entries
-  for (const sx of [-1, 1]) box(0.1, 2.0, 2.2, M.dark, sx * (L / 2 + 0.03), 1.2, 0, g, false);
+  for (const H of HOPPER_DEFS) box(0.1, 1.6, 2.0, M.dark, -H.tdir * (L / 2 + 0.03), H.platY + 0.55 - D, H.z, g, false);
   // fall pipe gantry on the roof: yellow lattice with the vertical pipe and sheave
   const gh = 12, s = 2.6;
   for (const [dx, dz] of [[-s, -s], [s, -s], [s, s], [-s, s]]) box(0.45, gh, 0.45, M.yellow, dx, Hb + gh / 2, dz, g);
@@ -1105,7 +1108,7 @@ function buildTower() {
   addObst(tc - L / 2, D, -W / 2, tc + L / 2, D + Hb + gh, W / 2, 'tower');
   // transfer conveyor from the tower to the inclined fallpipe on starboard (covered, elevated). It runs on the
   // fallpipe centreline and its head pulley sits directly over the receiving funnel.
-  const i = Lo.ifp, fz = i.z - 2.2, rim = i.y + 5.0, yHead = rim + 0.9, yTail = D + 9.0, z0 = W / 2;
+  const i = Lo.ifp, fz = i.z - 2.2, rim = i.y + 4.1, yHead = rim + 0.8, yTail = D + 1.6, z0 = W / 2;
   const tail = V3(tc, yTail, z0), head = V3(tc, yHead, fz + 0.35);
   buildBelt(tail, head, 1.1, true);
   box(1.8, 2.2, 0.6, M.dark, tc, yTail + 0.6, z0 + 0.3, VG, false);                       // tower discharge opening
@@ -1121,13 +1124,13 @@ function buildIFP() {
   const Lo = LAYOUT, D = DECK, i = Lo.ifp, depth = VCFG.water;
   const g = new THREE.Group(); g.position.set(i.x, 0, 0); VG.add(g);
   // foundation and slewing hinge on the starboard deck edge
-  box(6, 3.4, 4.5, M.yellow, 0, D + 1.7, i.z - 2.4, g);
+  box(6, 1.6, 4.5, M.yellow, 0, D + 0.8, i.z - 2.4, g);
   box(4.4, 1.2, 1.2, M.dark, 0, i.y + 1.6, i.z, g);
   // receiving chute/hopper on top of the hinge
-  const ch = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 0.7, 2.0, 16, 1, true), M.hopper); ch.position.set(0, i.y + 4.0, i.z - 2.2); g.add(ch);
-  { const rr = new THREE.Mesh(new THREE.TorusGeometry(1.62, 0.1, 6, 24), M.yellow); rr.rotation.x = Math.PI / 2; rr.position.set(0, i.y + 5.0, i.z - 2.2); g.add(rr); }   // funnel rim
-  beam(V3(0, i.y + 3.0, i.z - 2.2), V3(0, i.y + 1.9, i.z - 0.2), 1.3, 1.3, M.hopper, g);                 // chute from funnel into the pipe head
-  for (const sx of [-1.4, 1.4]) beam(V3(sx, D + 3.4, i.z - 2.2), V3(sx * 0.8, i.y + 3.4, i.z - 2.2), 0.22, 0.22, M.yellow, g);   // funnel supports
+  const ch = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 0.7, 2.0, 16, 1, true), M.hopper); ch.position.set(0, i.y + 3.1, i.z - 2.2); g.add(ch);
+  { const rr = new THREE.Mesh(new THREE.TorusGeometry(1.62, 0.1, 6, 24), M.yellow); rr.rotation.x = Math.PI / 2; rr.position.set(0, i.y + 4.1, i.z - 2.2); g.add(rr); }   // funnel rim
+  beam(V3(0, i.y + 2.2, i.z - 2.2), V3(0, i.y + 1.9, i.z - 0.4), 1.3, 1.3, M.hopper, g);                 // chute from funnel into the pipe head
+  for (const sx of [-1.4, 1.4]) beam(V3(sx, D + 1.6, i.z - 2.2), V3(sx * 0.8, i.y + 2.6, i.z - 2.2), 0.22, 0.22, M.yellow, g);   // funnel supports
   // inclined pipe direction: towards the monopile scour ring, 52 deg below horizontal
   const ang = 52 * DEG, yEnd = -depth + 6.5, len = (i.y - yEnd) / Math.sin(ang), dz = len * Math.cos(ang);
   const a = V3(0, i.y + 1.6, i.z), b = V3(0, yEnd, i.z + dz);
@@ -1143,7 +1146,7 @@ function buildIFP() {
   const nz = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 1.1, 2.2, 16), M.yellow); nz.position.copy(b); nz.quaternion.setFromUnitVectors(UPV, V3().subVectors(a, b).normalize()); g.add(nz);
   VESSEL.ifpOutlet = V3(i.x, yEnd - 1.2, i.z + dz + 0.6);
   VESSEL.ifpHinge = V3(i.x, i.y + 1.6, i.z);
-  addObst(i.x - 3, D, i.z - 4.7, i.x + 3, D + 4.6, SHIP.B / 2 + 0.5, 'ifp');
+  addObst(i.x - 3, D, i.z - 4.7, i.x + 3, D + 4.2, SHIP.B / 2 + 0.5, 'ifp');
 }
 
 function buildAccommodation() {
@@ -1357,10 +1360,11 @@ class HoldField {
     this.cap = new Float32Array(N).fill(this.maxH);
     for (const H of HOPPER_DEFS) {
       if (H.x < def.x0 || H.x > def.x1 || H.platY === undefined) continue;
-      const A = H.half + H.apron + 0.3;
+      const A = H.half + H.apron + 0.3, c = Math.cos(H.rot || 0), sn = Math.sin(H.rot || 0);
       for (let j = 0; j < this.nz; j++) for (let i = 0; i < this.nx; i++) {
-        const x = this.x0 + (i + 0.5) * CELL, z = this.z0 + (j + 0.5) * CELL;
-        if (Math.abs(x - H.x) < A && z > H.z - A) this.cap[j * this.nx + i] = Math.max(this.fl[j * this.nx + i], H.platY - 1.2);
+        const dx = this.x0 + (i + 0.5) * CELL - H.x, dz = this.z0 + (j + 0.5) * CELL - H.z;
+        const lx = dx * c - dz * sn, lz = dx * sn + dz * c;     // hopper frame (+x towards the wall it hangs from)
+        if (Math.abs(lz) < A && lx > -A) this.cap[j * this.nx + i] = Math.max(this.fl[j * this.nx + i], H.platY - 1.2);
       }
     }
     this.buildMesh();
